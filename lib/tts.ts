@@ -4,6 +4,9 @@ import { Voice } from '@/types';
 // Cache for voices list
 let voicesCache: Voice[] | null = null;
 
+// Maximum characters per chunk (to avoid 10 minute limit per request)
+const MAX_CHARS_PER_CHUNK = 3000;
+
 // Type for MsEdgeTTS voice
 interface MsEdgeVoice {
     Name: string;
@@ -58,18 +61,69 @@ export function mapSpeedToRate(speed: number): string {
     return percentage >= 0 ? `+${percentage}%` : `${percentage}%`;
 }
 
-export async function synthesizeSpeech(
+/**
+ * Split text into chunks at sentence boundaries
+ * This helps avoid cutting words/sentences in the middle
+ */
+function splitTextIntoChunks(text: string, maxCharsPerChunk: number = MAX_CHARS_PER_CHUNK): string[] {
+    const chunks: string[] = [];
+    let remainingText = text.trim();
+
+    while (remainingText.length > 0) {
+        if (remainingText.length <= maxCharsPerChunk) {
+            chunks.push(remainingText);
+            break;
+        }
+
+        // Find the best split point (end of sentence) within the limit
+        let splitIndex = maxCharsPerChunk;
+
+        // Look for sentence endings: . ! ? followed by space or end
+        const sentenceEnders = ['. ', '! ', '? ', '.\n', '!\n', '?\n'];
+        let bestSplit = -1;
+
+        for (const ender of sentenceEnders) {
+            const lastIndex = remainingText.lastIndexOf(ender, maxCharsPerChunk);
+            if (lastIndex > bestSplit) {
+                bestSplit = lastIndex + ender.length - 1; // Include the punctuation
+            }
+        }
+
+        // If we found a sentence boundary, use it
+        if (bestSplit > maxCharsPerChunk * 0.5) {
+            splitIndex = bestSplit;
+        } else {
+            // Fallback: try to split at newline
+            const newlineIndex = remainingText.lastIndexOf('\n', maxCharsPerChunk);
+            if (newlineIndex > maxCharsPerChunk * 0.5) {
+                splitIndex = newlineIndex;
+            } else {
+                // Last resort: split at space
+                const spaceIndex = remainingText.lastIndexOf(' ', maxCharsPerChunk);
+                if (spaceIndex > maxCharsPerChunk * 0.5) {
+                    splitIndex = spaceIndex;
+                }
+            }
+        }
+
+        chunks.push(remainingText.slice(0, splitIndex).trim());
+        remainingText = remainingText.slice(splitIndex).trim();
+    }
+
+    return chunks;
+}
+
+/**
+ * Synthesize a single chunk of text to audio
+ */
+async function synthesizeChunk(
     text: string,
-    voice: string,
-    rate: string = '+0%'
+    voice: string
 ): Promise<Buffer> {
     const tts = new MsEdgeTTS();
     await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
 
-    // Collect all audio chunks
     const chunks: Buffer[] = [];
-
-    // toStream returns an object with audioStream property
     const result = tts.toStream(text);
     const audioStream = result.audioStream;
 
@@ -86,6 +140,39 @@ export async function synthesizeSpeech(
             reject(err);
         });
     });
+}
+
+/**
+ * Synthesize speech with automatic text chunking for long texts
+ * This allows audio output longer than the 10-minute API limit
+ */
+export async function synthesizeSpeech(
+    text: string,
+    voice: string,
+    rate: string = '+0%'
+): Promise<Buffer> {
+    // Split text into manageable chunks
+    const textChunks = splitTextIntoChunks(text);
+
+    // If only one chunk, process directly
+    if (textChunks.length === 1) {
+        return synthesizeChunk(textChunks[0], voice);
+    }
+
+    // Process all chunks and concatenate audio
+    console.log(`Processing ${textChunks.length} text chunks...`);
+
+    const audioBuffers: Buffer[] = [];
+
+    for (let i = 0; i < textChunks.length; i++) {
+        console.log(`Processing chunk ${i + 1}/${textChunks.length} (${textChunks[i].length} chars)`);
+        const audioBuffer = await synthesizeChunk(textChunks[i], voice);
+        audioBuffers.push(audioBuffer);
+    }
+
+    // Concatenate all audio buffers
+    // Since MP3 is a streaming format, we can simply concatenate the buffers
+    return Buffer.concat(audioBuffers);
 }
 
 export async function getPreviewText(locale: string): Promise<string> {
