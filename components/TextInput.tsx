@@ -9,7 +9,7 @@ interface TextInputProps {
     maxLength?: number;
 }
 
-export default function TextInput({ value, onChange, maxLength = 10000 }: TextInputProps) {
+export default function TextInput({ value, onChange, maxLength = 50000 }: TextInputProps) {
     const [isDragOver, setIsDragOver] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
