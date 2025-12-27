@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Use webpack for better compatibility
+  serverExternalPackages: ['msedge-tts'],
 };
 
 export default nextConfig;

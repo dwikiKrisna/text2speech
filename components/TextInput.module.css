@@ -1,0 +1,139 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.charCount {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dropZone {
+  position: relative;
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  transition: all 0.2s ease;
+  background: var(--surface-secondary);
+}
+
+.dropZone:hover {
+  border-color: var(--primary);
+}
+
+.dropZone.dragOver {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 180px;
+  padding: 1rem;
+  border: none;
+  border-radius: 10px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1.6;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.textarea:focus {
+  outline: none;
+}
+
+.textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.uploadOverlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: var(--primary-light);
+  border-radius: 10px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--primary);
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.dropZone.dragOver .uploadOverlay {
+  display: flex;
+}
+
+.dropZone.dragOver .textarea {
+  opacity: 0.3;
+}
+
+.uploadIcon {
+  font-size: 2.5rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.fileInput {
+  display: none;
+}
+
+.uploadButton {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.uploadButton:hover {
+  background: var(--surface-secondary);
+  border-color: var(--primary);
+}
+
+.uploadButtonIcon {
+  font-size: 1.1rem;
+}
+
+.clearButton {
+  padding: 0.6rem 1rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.clearButton:hover {
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.1);
+}
