@@ -11,10 +11,17 @@ interface AudioOutputProps {
 
 type Status = 'idle' | 'generating' | 'ready' | 'error';
 
+interface Progress {
+    current: number;
+    total: number;
+    percent: number;
+}
+
 export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
     const [status, setStatus] = useState<Status>('idle');
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
     const [errorMessage, setErrorMessage] = useState<string>('');
+    const [progress, setProgress] = useState<Progress>({ current: 0, total: 0, percent: 0 });
     const audioRef = useRef<HTMLAudioElement>(null);
 
     const handleGenerate = async () => {
@@ -32,6 +39,7 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
 
         setStatus('generating');
         setErrorMessage('');
+        setProgress({ current: 0, total: 0, percent: 0 });
 
         // Revoke previous URL
         if (audioUrl) {
@@ -40,7 +48,7 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
         }
 
         try {
-            const response = await fetch('/api/tts', {
+            const response = await fetch('/api/tts-stream', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -53,10 +61,56 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
                 throw new Error(error.error || 'Failed to generate speech');
             }
 
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            setAudioUrl(url);
-            setStatus('ready');
+            const reader = response.body?.getReader();
+            if (!reader) {
+                throw new Error('No response body');
+            }
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const jsonStr = line.slice(6);
+                        try {
+                            const data = JSON.parse(jsonStr);
+
+                            if (data.type === 'start') {
+                                setProgress({ current: 0, total: data.totalChunks, percent: 0 });
+                            } else if (data.type === 'progress') {
+                                setProgress({
+                                    current: data.current,
+                                    total: data.total,
+                                    percent: data.percent
+                                });
+                            } else if (data.type === 'complete') {
+                                // Convert base64 to blob
+                                const binaryString = atob(data.audio);
+                                const bytes = new Uint8Array(binaryString.length);
+                                for (let i = 0; i < binaryString.length; i++) {
+                                    bytes[i] = binaryString.charCodeAt(i);
+                                }
+                                const blob = new Blob([bytes], { type: 'audio/mpeg' });
+                                const url = URL.createObjectURL(blob);
+                                setAudioUrl(url);
+                                setStatus('ready');
+                            } else if (data.type === 'error') {
+                                throw new Error(data.message);
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+            }
         } catch (error) {
             console.error('Generation failed:', error);
             setErrorMessage(error instanceof Error ? error.message : 'An error occurred');
@@ -91,8 +145,23 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
 
                 {status === 'generating' && (
                     <div className={styles.generating}>
-                        <div className={styles.spinner}></div>
-                        <p>Generating audio...</p>
+                        <div className={styles.progressContainer}>
+                            <div className={styles.progressHeader}>
+                                <span>Generating audio...</span>
+                                <span className={styles.progressPercent}>{progress.percent}%</span>
+                            </div>
+                            <div className={styles.progressBar}>
+                                <div
+                                    className={styles.progressFill}
+                                    style={{ width: `${progress.percent}%` }}
+                                />
+                            </div>
+                            {progress.total > 1 && (
+                                <p className={styles.progressDetail}>
+                                    Processing chunk {progress.current} of {progress.total}
+                                </p>
+                            )}
+                        </div>
                     </div>
                 )}
 
@@ -125,7 +194,7 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
                     {status === 'generating' ? (
                         <>
                             <span className={styles.buttonSpinner}></span>
-                            Generating...
+                            {progress.percent}% Processing...
                         </>
                     ) : (
                         <>
