@@ -7,6 +7,9 @@ let voicesCache: Voice[] | null = null;
 // Maximum characters per chunk (to avoid 10 minute limit per request)
 const MAX_CHARS_PER_CHUNK = 3000;
 
+// Words per subtitle line
+const WORDS_PER_SUBTITLE = 10;
+
 // Type for MsEdgeTTS voice
 interface MsEdgeVoice {
     Name: string;
@@ -16,11 +19,31 @@ interface MsEdgeVoice {
     FriendlyName: string;
 }
 
+// Word boundary metadata from TTS
+export interface WordBoundary {
+    Type: string;
+    Data: {
+        Offset: number;      // Time offset in ticks (100ns units)
+        Duration: number;    // Duration in ticks
+        text: {
+            Text: string;
+            Length: number;
+            BoundaryType: string;
+        };
+    };
+}
+
 // Progress callback type
 export interface ProgressInfo {
     current: number;
     total: number;
     percent: number;
+}
+
+// Result with audio and SRT
+export interface SynthesisResult {
+    audio: Buffer;
+    srt: string;
 }
 
 export type ProgressCallback = (progress: ProgressInfo) => void;
@@ -65,9 +88,77 @@ export async function getLanguages(): Promise<string[]> {
 }
 
 export function mapSpeedToRate(speed: number): string {
-    // speed: 0.5 to 2.0 -> rate: -50% to +100%
     const percentage = Math.round((speed - 1) * 100);
     return percentage >= 0 ? `+${percentage}%` : `${percentage}%`;
+}
+
+/**
+ * Convert ticks (100ns) to milliseconds
+ */
+function ticksToMs(ticks: number): number {
+    return ticks / 10000;
+}
+
+/**
+ * Format milliseconds to SRT timestamp (HH:MM:SS,mmm)
+ */
+function formatSrtTime(ms: number): string {
+    const hours = Math.floor(ms / 3600000);
+    const minutes = Math.floor((ms % 3600000) / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    const milliseconds = Math.floor(ms % 1000);
+
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+}
+
+/**
+ * Generate SRT content from word boundaries
+ */
+function generateSRT(boundaries: WordBoundary[], timeOffset: number = 0): string {
+    if (boundaries.length === 0) return '';
+
+    const subtitles: string[] = [];
+    let subtitleIndex = 1;
+    let currentWords: { text: string; startMs: number; endMs: number }[] = [];
+
+    for (const boundary of boundaries) {
+        // Skip non-word boundaries (punctuation only)
+        const text = boundary.Data?.text?.Text?.trim();
+        if (!text || boundary.Data?.text?.BoundaryType === 'PunctuationBoundary') continue;
+
+        const startMs = ticksToMs(boundary.Data.Offset) + timeOffset;
+        const endMs = startMs + ticksToMs(boundary.Data.Duration);
+
+        currentWords.push({ text, startMs, endMs });
+
+        // Create subtitle when we have enough words or at sentence end
+        const isEndOfSentence = text.match(/[.!?]$/);
+        if (currentWords.length >= WORDS_PER_SUBTITLE || isEndOfSentence) {
+            const lineText = currentWords.map(w => w.text).join(' ');
+            const lineStart = currentWords[0].startMs;
+            const lineEnd = currentWords[currentWords.length - 1].endMs;
+
+            subtitles.push(
+                `${subtitleIndex}\n${formatSrtTime(lineStart)} --> ${formatSrtTime(lineEnd)}\n${lineText}\n`
+            );
+
+            subtitleIndex++;
+            currentWords = [];
+        }
+    }
+
+    // Handle remaining words
+    if (currentWords.length > 0) {
+        const lineText = currentWords.map(w => w.text).join(' ');
+        const lineStart = currentWords[0].startMs;
+        const lineEnd = currentWords[currentWords.length - 1].endMs;
+
+        subtitles.push(
+            `${subtitleIndex}\n${formatSrtTime(lineStart)} --> ${formatSrtTime(lineEnd)}\n${lineText}\n`
+        );
+    }
+
+    return subtitles.join('\n');
 }
 
 /**
@@ -116,23 +207,45 @@ function splitTextIntoChunks(text: string, maxCharsPerChunk: number = MAX_CHARS_
 }
 
 /**
- * Synthesize a single chunk of text to audio
+ * Synthesize a single chunk with metadata for SRT
  */
-async function synthesizeChunk(text: string, voice: string): Promise<Buffer> {
+async function synthesizeChunkWithMetadata(
+    text: string,
+    voice: string
+): Promise<{ audio: Buffer; boundaries: WordBoundary[] }> {
     const tts = new MsEdgeTTS();
     await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
 
-    const chunks: Buffer[] = [];
+    const audioChunks: Buffer[] = [];
+    const boundaries: WordBoundary[] = [];
+
     const result = tts.toStream(text);
     const audioStream = result.audioStream;
+    const metadataStream = result.metadataStream;
 
     return new Promise((resolve, reject) => {
         audioStream.on('data', (chunk: Buffer) => {
-            chunks.push(chunk);
+            audioChunks.push(chunk);
         });
 
+        if (metadataStream) {
+            metadataStream.on('data', (data: Buffer) => {
+                try {
+                    const metadata = JSON.parse(data.toString()) as WordBoundary;
+                    if (metadata.Type === 'WordBoundary') {
+                        boundaries.push(metadata);
+                    }
+                } catch {
+                    // Ignore parse errors
+                }
+            });
+        }
+
         audioStream.on('end', () => {
-            resolve(Buffer.concat(chunks));
+            resolve({
+                audio: Buffer.concat(audioChunks),
+                boundaries
+            });
         });
 
         audioStream.on('error', (err: Error) => {
@@ -149,27 +262,38 @@ export function getChunkCount(text: string): number {
 }
 
 /**
- * Synthesize speech with progress callback
+ * Synthesize speech with progress and SRT generation
  */
-export async function synthesizeSpeechWithProgress(
+export async function synthesizeSpeechWithSRT(
     text: string,
     voice: string,
     rate: string = '+0%',
     onProgress?: ProgressCallback
-): Promise<Buffer> {
+): Promise<SynthesisResult> {
     const textChunks = splitTextIntoChunks(text);
     const total = textChunks.length;
 
-    if (total === 1) {
-        onProgress?.({ current: 1, total: 1, percent: 100 });
-        return synthesizeChunk(textChunks[0], voice);
-    }
-
     const audioBuffers: Buffer[] = [];
+    const allBoundaries: WordBoundary[] = [];
+    let timeOffset = 0;
 
     for (let i = 0; i < textChunks.length; i++) {
-        const audioBuffer = await synthesizeChunk(textChunks[i], voice);
-        audioBuffers.push(audioBuffer);
+        const { audio, boundaries } = await synthesizeChunkWithMetadata(textChunks[i], voice);
+        audioBuffers.push(audio);
+
+        // Adjust boundary offsets for multi-chunk
+        for (const boundary of boundaries) {
+            const adjustedBoundary = { ...boundary };
+            adjustedBoundary.Data = {
+                ...boundary.Data,
+                Offset: boundary.Data.Offset + (timeOffset * 10000) // Convert ms to ticks
+            };
+            allBoundaries.push(adjustedBoundary);
+        }
+
+        // Estimate duration based on audio size (48kbps = 6000 bytes/sec)
+        const estimatedDurationMs = (audio.length / 6000) * 1000;
+        timeOffset += estimatedDurationMs;
 
         const progress: ProgressInfo = {
             current: i + 1,
@@ -179,7 +303,23 @@ export async function synthesizeSpeechWithProgress(
         onProgress?.(progress);
     }
 
-    return Buffer.concat(audioBuffers);
+    const audioBuffer = Buffer.concat(audioBuffers);
+    const srt = generateSRT(allBoundaries);
+
+    return { audio: audioBuffer, srt };
+}
+
+/**
+ * Synthesize speech with progress callback (backward compatible)
+ */
+export async function synthesizeSpeechWithProgress(
+    text: string,
+    voice: string,
+    rate: string = '+0%',
+    onProgress?: ProgressCallback
+): Promise<Buffer> {
+    const result = await synthesizeSpeechWithSRT(text, voice, rate, onProgress);
+    return result.audio;
 }
 
 /**

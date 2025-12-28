@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { synthesizeSpeechWithProgress, mapSpeedToRate, getChunkCount } from '@/lib/tts';
+import { synthesizeSpeechWithSRT, mapSpeedToRate, getChunkCount } from '@/lib/tts';
 
 export async function POST(request: NextRequest) {
     try {
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
                         `data: ${JSON.stringify({ type: 'start', totalChunks })}\n\n`
                     ));
 
-                    const audioBuffer = await synthesizeSpeechWithProgress(
+                    const result = await synthesizeSpeechWithSRT(
                         text,
                         voice,
                         rate,
@@ -46,10 +46,14 @@ export async function POST(request: NextRequest) {
                         }
                     );
 
-                    // Send complete event with audio as base64
-                    const audioBase64 = audioBuffer.toString('base64');
+                    // Send complete event with audio and SRT
+                    const audioBase64 = result.audio.toString('base64');
                     controller.enqueue(encoder.encode(
-                        `data: ${JSON.stringify({ type: 'complete', audio: audioBase64 })}\n\n`
+                        `data: ${JSON.stringify({
+                            type: 'complete',
+                            audio: audioBase64,
+                            srt: result.srt
+                        })}\n\n`
                     ));
 
                     controller.close();

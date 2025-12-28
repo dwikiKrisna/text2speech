@@ -186,3 +186,24 @@
     background: var(--success);
     color: white;
 }
+
+.srtButton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.875rem 1.5rem;
+    border: 2px solid #8b5cf6;
+    border-radius: 10px;
+    background: transparent;
+    color: #8b5cf6;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.srtButton:hover {
+    background: #8b5cf6;
+    color: white;
+}

@@ -20,6 +20,7 @@ interface Progress {
 export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
     const [status, setStatus] = useState<Status>('idle');
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
+    const [srtContent, setSrtContent] = useState<string>('');
     const [errorMessage, setErrorMessage] = useState<string>('');
     const [progress, setProgress] = useState<Progress>({ current: 0, total: 0, percent: 0 });
     const audioRef = useRef<HTMLAudioElement>(null);
@@ -40,6 +41,7 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
         setStatus('generating');
         setErrorMessage('');
         setProgress({ current: 0, total: 0, percent: 0 });
+        setSrtContent('');
 
         // Revoke previous URL
         if (audioUrl) {
@@ -101,6 +103,12 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
                                 const blob = new Blob([bytes], { type: 'audio/mpeg' });
                                 const url = URL.createObjectURL(blob);
                                 setAudioUrl(url);
+
+                                // Save SRT content
+                                if (data.srt) {
+                                    setSrtContent(data.srt);
+                                }
+
                                 setStatus('ready');
                             } else if (data.type === 'error') {
                                 throw new Error(data.message);
@@ -127,6 +135,20 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+    };
+
+    const handleDownloadSRT = () => {
+        if (!srtContent) return;
+
+        const blob = new Blob([srtContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `speech-${Date.now()}.srt`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     };
 
     const canGenerate = text.trim() && voice;
@@ -205,14 +227,27 @@ export default function AudioOutput({ text, voice, speed }: AudioOutputProps) {
                 </button>
 
                 {status === 'ready' && audioUrl && (
-                    <button
-                        type="button"
-                        className={styles.downloadButton}
-                        onClick={handleDownload}
-                    >
-                        <span className={styles.buttonIcon}>⬇️</span>
-                        Download MP3
-                    </button>
+                    <>
+                        <button
+                            type="button"
+                            className={styles.downloadButton}
+                            onClick={handleDownload}
+                        >
+                            <span className={styles.buttonIcon}>⬇️</span>
+                            Download MP3
+                        </button>
+
+                        {srtContent && (
+                            <button
+                                type="button"
+                                className={styles.srtButton}
+                                onClick={handleDownloadSRT}
+                            >
+                                <span className={styles.buttonIcon}>📝</span>
+                                Download SRT
+                            </button>
+                        )}
+                    </>
                 )}
             </div>
         </div>
